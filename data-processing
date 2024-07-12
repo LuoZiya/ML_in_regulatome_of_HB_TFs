@@ -1,0 +1,61 @@
+#data-processing
+
+1. Remove adapt, cut and genome mapping
+java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.32.jar PE -threads 6 -phred33 ncbi-fastq/$file\_R1.fq.gz ncbi-fastq/$file\_R2.fq.gz trim/$file\_R1.clean.fq.gz trim/$file\_R1.unpaired.fq.gz trim/$file\_R2.clean.fq.gz trim/$file\_R2.unpaired.fq.gz ILLUMINACLIP:/$EBROOTTRIMMOMATIC/adapters/TruSeq3-PE.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:50
+bowtie2 --end-to-end --very-sensitive --no-mixed --no-discordant --phred33 -I 10 -X 700 -p 8 -x /public/home/zluo/new-homeobox-family/ref/Zea_mays.Zm-B73-REFERENCE-NAM-5.0.dna.toplevel -1 ../ncbi-fastq/$file\_R1.fq.gz -2 ../ncbi-fastq/$file\_R2.fq.gz -S ./sam/$file\_bowtie2.sam
+
+2. Remove multiple alignments
+head -n 687 $file\_bowtie2.sam > $file\.txt
+grep "AS:" $file\_bowtie2.sam | grep -v "XS:" >$file\_uniq.sam
+cat $file\.txt $file\_uniq.sam > $file\_uniqtrimm.sam
+samtools view -b -q 30 -S $file\_uniqtrimm.sam -o $file\_uniqtrimm.bam
+samtools sort -o $file\_uniqtrimm.bam.sorted.bam $file\_uniqtrimm.bam
+
+3. Remove PCR duplication 
+samtools rmdup $file\_uniqtrimm.bam.sorted.bam $file\_uniqtrimm.bam.sorted.rmdup.bam
+
+4. Remove TF vector contamination
+intersectBed -a $file\_uniqtrimm.bam.sorted.rmdup.bam -b ${file:0:14}-up2kdown1k-site.bed -v > $file\_rmblacklist.bam
+
+5. Peak calling of tsCUT&Tag and ATAC-seq, keep 150bp on both sides of summit, and call-summit
+macs2 callpeak -g 2.2e+9 -c Maize_GFP-1_rmMtPt.bam Maize_GFP-2_rmMtPt.bam -t $file\_rmblacklistandMtPt.bam -n $file-e2 --outdir ./macs2-1e2-$file/ -s 150 -B -p 1e-2 -f BAMPE
+awk '{print $1 "\t" $2+$10-150 "\t" $2+$10+150 "\t" $4 "\t" $5}' $file >$file-updown150bp
+macs2 callpeak -g 2.2e+9 -t $file\_uniqtrimm.bam.sorted.rmdup.bam --shift -100 --extsize 200 --nomodel -B --SPMR --call-summit -p 1e-5 -n $file --outdir ./macs2-atac-$file/ -f BAMPE
+
+6. Biological replicates dealed by IDR（threshold：0.01）
+module load Anaconda3/4.3.1
+source activate py3_env
+idr --samples $file-1-e2-up150bppeaks.narrowPeak $file-2-e2-up150bppeaks.narrowPeak --output-file $file-0.01merge12.narrowPeak  --idr-threshold 0.01
+
+7. Data quality
+#Calculating NSC & RSC
+module load R/3.5.1
+samtools view -F 0x0204 -o - ../bam/$file\_rmblacklist.bam | awk 'BEGIN{OFS="\t"}{if (and($2,16) > 0) {print $3,($4-1),($4-1+length($10)),"N","1000","-"} else {print $3,($4-1),($4-1+length($10)),"N","1000","+"} }' | gzip -c > $file\.tagAlign.gz
+Rscript /public/home/zluo/software/phantompeakqualtools/run_spp.R -c=$file\.tagAlign.gz -s=0:5:1000 -p=4 -odir=./$file\sample -savp=./$file\.sample.SCC.pdf -out=$file\.sample.SCC_report.txt -rf
+#Calculating pearson between biological replicates
+samtools index $file\.bam $file\.bam.bai"; done
+bamCoverage -b $file\.bam -o ../bw/$file\.bw --binSize 10 --normalizeTo1x 2362232012 --ignoreForNormalization Mt,Pt --extendReads
+multiBigwigSummary bins -b $file-1_rmblacklist.bw $file-2_rmblacklist.bw -o $file-12-results.npz -p 4
+plotCorrelation -in $file-results.npz --corMethod pearson --skipZeros --plotTitle "Spearman Correlation of Read Counts" --whatToPlot scatterplot -o scatterplot-$file\.png --outFileCorMatrix $file\_bwscores.tab
+# Visualizing reads enrichment in TSS
+bsub -J compMatrix -n 4 -R span[hosts=1] -o %J.out -e %J.err -q q2680v2 "
+computeMatrix reference-point --referencePoint TSS -a 2000 -b 2000 -R ~/new-homeobox-family/ref/Zea_mays.Zm-B73-REFERENCE-NAM-5.0.55.gtf -S $file-1_rmblacklist.bw $file-2_rmblacklist.bw Maize_GFP-1.bw Maize_GFP-2.bw --skipZeros -o $file-input-rp2-TSS.matrix.TSS_TES.3k.gz --outFileSortedRegions $file-input-rp.TSS_TES.2k.bed -p 4
+plotHeatmap -m $file-input-rp2-TSS.matrix.TSS_TES.3k.gz -out $file.png
+plotHeatmap -m $file-input-rp2-TSS.matrix.TSS_TES.3k.gz --plotFileFormat pdf --dpi 720
+
+8. Peak summit annotation by ChIPseeker
+module load R/4.0.0
+library(ChIPseeker)
+library(GenomicFeatures)
+TxDb_maize <- makeTxDbFromGFF("~/ref/Zea_mays.Zm-B73-REFERENCE-NAM-5.0.55.gff3")
+a = list.files(pattern = ".bed")
+for (i in 1:28){
+peak <- readPeakFile(a[i])
+peakAnno <- annotatePeak(peak, tssRegion=c(-2000, 2000), TxDb=TxDb_maize)
+write.table(peakAnno,paste(a[i],"-annotate.txt",""), sep = '\t', row.names = FALSE, quote = FALSE)
+}
+
+9. Fasta from 50bp on both sides of summit for motif identified
+awk '{print $1 "\t" $2-50 "\t" $3+50}' $file > ../motif/$file.updown50.bed
+fastaFromBed -fi ~/new-homeobox-family/ref/Zea_mays.Zm-B73-REFERENCE-NAM-5.0.dna.toplevel.fa -bed ../motif/$file.updown50.bed -fo ../motif/$file.updown50.fa
+meme-chip $file -oc $file-motif/ -db /public/home/zluo/software/meme-chip/motif_databases/JASPAR/JASPAR2018_CORE_plants_non-redundant.meme -meme-mod anr -meme-minw 4 -meme-maxw 10 -meme-nmotifs 20 -meme-p 5
