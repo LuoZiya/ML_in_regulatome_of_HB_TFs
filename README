@@ -1,0 +1,6 @@
+# README
+1. The file "data-processing" used for processing sequence data.
+2. Machine Learning Analysis Workflow:
+① Train_data: The model training selects the overlapping binding sites of transcription factors and the open chromatin region of ATAC-seq , upstream and downstream 100bp of the peak summit is positive data, and the open chromatin region of ATAC-seq without TFBS is negative data set.
+② "python run.py" is used for batch modeling of the 28 TFs individually.
+③ "python yc_all.py": The model constructed by 28 TFs was used in batches to input the SAM ATAC peak 200bp above and below to predict the transcription factor binding sites.
