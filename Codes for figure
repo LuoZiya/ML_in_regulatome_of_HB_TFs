@@ -1,0 +1,132 @@
+
+1. Test and draw of power-law distribution (For Supplemental Fig. S11)
+
+from sklearn import linear_model
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import matplotlib as mpl
+from scipy.stats import kstest
+
+file_path = 'merged-tftgandppi-network.txt'
+data = pd.read_csv(file_path, delimiter='\t')
+
+# calculating in-degree per gene
+in_degree_counts = data['TG'].value_counts()
+in_degree_counts.to_csv('in_degree_counts.csv', header=True, index=True)
+
+#test power-law distribution
+f = pd.read_csv("in_degree_counts.csv", sep=",", low_memory=False)
+col = "TG"
+d = f[(~f[col].isnull())][col]
+data = d.value_counts(normalize=True)
+data = pd.DataFrame([list(data.index), list(data)]).T
+data.columns = ["x", "y"]
+data["x"] = np.log(data["x"])
+data["y"] = np.log(data["y"])
+sns.distplot(f[(~f[col].isnull())][col], rug=True, hist=True, kde=True, color="g")
+plt.show()
+
+reg = linear_model.LinearRegression()
+reg.fit(np.array(data["x"]).reshape(-1, 1), np.array(data["y"]))
+pre = reg.predict(np.array(data["x"]).reshape(-1, 1))
+data["pre"] = pd.DataFrame(pre)
+fig = plt.figure(figsize=(15, 8), dpi=80)
+ax1 = fig.add_subplot(111)
+ax1.scatter(data["x"], data["y"])
+ax2 = ax1.twiny()
+ax2.plot(data["x"], data["pre"], color="r")
+plt.show()
+
+print(reg.coef_)  # output the r
+print(reg.intercept_)  
+print(reg.score(np.array(data["x"]).reshape(-1, 1),np.array(data["y"])))  # Calculating R square and testing the fitting effect
+# Testing for normal distribution
+p = kstest(f[col], "norm", N=len(f[col]))
+print(p)
+
+2. Calculating and drawing co-regulation correlation of peaks (For Supplemental Fig. S7)
+
+R CMD BATCH cal_jaccard.r
+data <- as.matrix(read.table("all-peak-juzhen.txt", header = TRUE, row.names = 1))
+# Calculating Pairwise Correlation Coefficients
+correlation_matrix <- cor(data)
+write.table(correlation_matrix, file = "correlation_matrix.txt", sep = "\t", quote = FALSE)
+# Calculating Jaccard Index Values
+jaccard_index <- function(set1, set2) {
+  intersection <- sum(set1 & set2)
+  union <- sum(set1 | set2)
+  return(intersection / union)
+}
+num_samples <- nrow(data) 
+jaccard_matrix <- matrix(0, nrow = num_samples, ncol = num_samples)
+for (i in 1:num_samples) {
+  for (j in 1:num_samples) {
+    jaccard_matrix[i, j] <- jaccard_index(data[i, ], data[j, ])
+  }
+}
+write.table(jaccard_matrix, file = "jaccard_matrix.txt", sep = "\t", quote = FALSE)
+# Creating Heatmaps
+png(file = "correlation_heatmap.png")
+heatmap(correlation_matrix, main = "Pairwise Correlation Heatmap", xlab = "Samples", ylab = "Samples")
+dev.off()
+png(file = "jaccard_heatmap.png")
+heatmap(jaccard_matrix, main = "Jaccard Index Heatmap", xlab = "Samples", ylab = "Samples")
+dev.off()
+
+3. Testing the normal distribution of Divergence score (For Supplemental Fig. S9)
+# R
+shapiro.test(regulatory$DS)
+hist(regulatory$DS,prob=T)
+xfit<-seq(min(iris$Sepal.Length),max(iris$Sepal.Length),length=20)
+xfit<-seq(min(regulatory$DS),max(regulatory$DS),length=20)
+yfit<-dnorm(xfit,mean(regulatory$DS),sd(regulatory$DS))
+lines(xfit,yfit,col="red",lwd=2)
+lines(density(regulatory$DS),col="blue",lwd=2) 
+
+4. Building  TF-Gene random (For Supplemental Fig. S6)
+
+cat tf-tgnum.txt |while read num gene; do perl rand_gene.pl $num $gene; done
+
+#Usage: perl rand_gene.pl genenumber geneID
+#!usr/bin/perl -w
+open IN,"<all-targetgene.txt" or die "cannot open the file $!";
+while(<IN>)
+{
+    chomp;
+    push @data,$_;
+    #print "$tmp[1]\n";exit 0;
+}
+close IN;
+for(1..100)
+{
+    %hash=();
+    while((keys %hash) < $ARGV[0])
+    {
+        $hash{int(rand($#data+1))}=1;
+    }
+    open OUT,">./random_genefile/$ARGV[1]linear_rand$_" or die "Cannot open the file $!";
+    foreach (keys %hash)
+    {
+        print OUT "$data[$_]\n";
+    }
+    close OUT;
+}
+
+for((i=1;i<101;i++)); do cat ../Zm00001eb*_rand$i |sort |uniq -c |awk '{print $1}' |sort |uniq -c> rand$i;done
+for((i=1;i<101;i++)); do python get-drawdensity.py rand$i ;done > rand1-100.txt
+import sys
+f1=open(sys.argv[1],'r')
+rand=sys.argv[1]
+for i in f1.readlines():
+        s=i.strip().split(" ")
+        print(s[0]+"\t"+s[1]+"\t"+"rand"+str(rand)+"\t"+"rand")
+f1.seek(0)
+f1.close()
+
+library(ggplot2)
+ggplot(rand1_100,aes(TF,num,group=group,colour=color))+geom_line(size=2)+ theme_bw() 
+awk 'BEGIN{FS="\t"}{if($1 >= 13){print $0}}' All-targetgene-count.txt > hub-gene.txt
+awk '{print $2}' hub-gene.txt |grep -v "geneId" > hub-gene.id
+awk 'BEGIN{FS="\t"}{if($1 ==1 ){print $0}}' All-targetgene-count.txt |awk '{print $2}' > targetgene-boundby1TF.id
